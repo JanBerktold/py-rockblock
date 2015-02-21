@@ -2,6 +2,7 @@ import serial
 import threading
 import time
 import exceptions
+import re
 from concurrent import futures
 from poller import SerialPoller
 
@@ -22,9 +23,10 @@ def _prepare_byte(msg):
 
 class Device:
 	executor = futures.ThreadPoolExecutor(max_workers=1)
+	signal_strength = None
 
 	def __init__(self, addr):
-		self.port = serial.Serial(addr, 19200)
+		self.port = serial.Serial(addr, 19200, timeout=0.5)
 		self.serial = SerialPoller(self, self.port)
 
 		# setup
@@ -42,8 +44,20 @@ class Device:
 			if len(s) > 0:
 				return s
 
-	def _initiate_session(self):
-		print("now")
+	def _initiate_session_async(self, response):
+		self.executor.submit(self._initiate_session, response)
+
+	def _initiate_session(self, response):
+		print("WAIT FOR NETWORK")
+		self._wait_for_network()
+		print("GOT NETWORK")
+		self.port.write(response and "" or "AT+SBDIX\r")
+		last, logs = self.serial.read_until("OK\r")
+		for msg in logs:
+			if msg[:7] == "+SBDIX:":
+				values = re.findall("[0-9]+", msg[7:])
+				print(values)
+				break
 
 	def _set_settings(self):
 		self.port.write("AT+SBDMTA=1\r")
@@ -61,10 +75,22 @@ class Device:
 		code = self.serial.wait_for("[0-9]")
 		if code != "0":
 			raise DeviceError("Expected code '0', got " + code)
-		return self._initiate_session()
+		return self._initiate_session(False)
+
+	def _interpret_registration(self, msg):
+		print("REG: " + msg)
 
 	def _handle_signal(self, msg):
 		print("RECIEVED UPDATE: " + msg)
+
+	def _wait_for_network(self):
+		# Reporting should already be enabled, but ye
+		self.port.write("AT+CIER=1,1,0,0\r")
+		print(self.serial.wait_for("\+CIEV:0,[^0]"))
+
+	def close(self):
+		self.serial.running = False
+		self.port.close()
 
 	def get_manufacturer(self):
 		"""Queries the modem's manufacturer.
