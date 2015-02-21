@@ -28,7 +28,6 @@ class SerialPoller:
 		self.device = dev
 		self.serial = serial
 		self.global_jobs = [
-			#GlobalJob("\+CIEV:[0-9]+,[0-9]+\r", dev._handle_signal),
 			GlobalJob("SBDRING", dev._initiate_session_async, True),
 			GlobalJob("\+AREG", dev._interpret_registration)
 		]

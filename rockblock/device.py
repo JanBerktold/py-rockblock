@@ -6,6 +6,7 @@ import re
 import const
 from concurrent import futures
 from poller import SerialPoller
+from const import *
 
 def _prepare_byte(msg):
 	array = bytearray(msg)
@@ -63,16 +64,17 @@ class Device:
 		self.port.write(response and com_session_ring or com_session)
 		last, logs = self.serial.read_until(reg_ok)
 		for msg in logs:
-			if msg[:7] == "+SBDIX:":
+			if msg[:7] == ans_session_start:
 				values = re.findall(reg_num, msg[7:])
 				if values[0] < 4:
 					print("SUCCESS")
+					print(values)
 				else:
 					raise DeviceError ("Session failed with code " + str(values[0]))
 				break
 
 	def _set_settings(self):
-		for com in ["AT+SBDMTA=1\r", com_set_alerts, com_set_registration]:
+		for com in [com_set_ring_alert, com_set_alerts, com_set_registration]:
 			self.port.write(com)
 			self.serial.wait_for(reg_ok)
 
@@ -89,13 +91,10 @@ class Device:
 	def _interpret_registration(self, msg):
 		print("REG: " + msg)
 
-	def _handle_signal(self, msg):
-		print("RECIEVED UPDATE: " + msg)
-
 	def _wait_for_network(self):
 		# Reporting should already be enabled, but ye
 		self.port.write(com_set_alerts)
-		print(self.serial.wait_for(reg_ciev_registered))
+		self.serial.wait_for(reg_ciev_registered)
 
 	def close(self):
 		"""Terminates all outgoing connections.
