@@ -4,6 +4,7 @@ import time
 import exceptions
 import re
 import const
+from datetime import datetime
 from concurrent import futures
 from poller import SerialPoller
 from const import *
@@ -66,12 +67,13 @@ class Device:
 		for msg in logs:
 			if msg[:7] == ans_session_start:
 				values = re.findall(reg_num, msg[7:])
+				print(values)
 				if values[0] < 4:
 					print("SUCCESS")
-					print(values)
+					# return momsn code
+					return values[1]
 				else:
 					raise DeviceError ("Session failed with code " + str(values[0]))
-				break
 
 	def _set_settings(self):
 		for com in [com_set_ring_alert, com_set_alerts, com_set_registration]:
@@ -95,6 +97,27 @@ class Device:
 		# Reporting should already be enabled, but ye
 		self.port.write(com_set_alerts)
 		self.serial.wait_for(reg_ciev_registered)
+
+	def _get_time(self):
+		self.port.write(com_ask_time)
+		last, logs = self.serial.read_until(reg_ok)
+		for string in logs:
+			if reg_time.match(string) != None:
+				numbers = reg_num.findall(string)
+				for i in range(len(numbers)):
+					numbers[i] = int(numbers[i])
+				return datetime(
+					year = numbers[0] + 2000,
+					month = numbers[1],
+					day = numbers[2],
+					hour = numbers[3],
+					minute = numbers[4],
+					second = numbers[5]
+				)
+
+	def _read_message(self):
+		print("attempted to read message")
+		return 2
 
 	def close(self):
 		"""Terminates all outgoing connections.
@@ -133,5 +156,15 @@ class Device:
 		"""
 		return self.executor.submit(self._get_info, "CGSN")
 
+	def get_time(self):
+		"""Queries the iridium network's system time.
+
+		Returns a future object.
+		"""
+		return self.executor.submit(self._get_time)
+
 	def send_message(self, msg):
 		return self.executor.submit(self._send_message, msg)
+
+	def read_message(self, msg):
+		return self.executor.submit(self._read_message)
