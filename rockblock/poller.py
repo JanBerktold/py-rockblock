@@ -7,12 +7,16 @@ class SerialJob:
 	result = ""
 
 	def __init__(self, regex):
-		self.regex = regex
+		if isinstance(regex, str):
+			self.regex = re.compile(regex)
+		else:
+			self.regex = regex
 
 class GlobalJob:
-	def __init__(self, regex, f):
+	def __init__(self, regex, f, arg = None):
 		self.callback = f
 		self.regex = regex
+		self.arg = arg
 
 class SerialPoller:
 	buf = ""
@@ -25,7 +29,7 @@ class SerialPoller:
 		self.serial = serial
 		self.global_jobs = [
 			#GlobalJob("\+CIEV:[0-9]+,[0-9]+\r", dev._handle_signal),
-			GlobalJob("SBDRING", dev._initiate_session_async),
+			GlobalJob("SBDRING", dev._initiate_session_async, True),
 			GlobalJob("\+AREG", dev._interpret_registration)
 		]
 		self.thread = threading.Thread(target=self.worker)
@@ -50,9 +54,10 @@ class SerialPoller:
 					# check for unsolicited updates
 					for job in self.global_jobs:
 						if re.match(job.regex, self.buf):
-							job.callback(self.buf[:-1])
+							job.callback(self.buf[:-1], job.arg)
 					self.logs.append(self.buf[:-1])
 					self.buf = ""
+
 		self.running = False
 
 	def _reset(self):
