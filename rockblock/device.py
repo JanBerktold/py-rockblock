@@ -1,13 +1,15 @@
 import serial
 import threading
 import time
-import exceptions
 import re
-import const
+
+from threading import Lock
 from datetime import datetime
-from concurrent import futures
-from poller import SerialPoller
-from const import *
+from concurrent.futures import *
+
+from .exceptions import *
+from .const import *
+from .poller import SerialPoller
 
 def _prepare_byte(msg):
 	array = bytearray(msg)
@@ -24,11 +26,12 @@ def _prepare_byte(msg):
 	array.append(first)
 	return array
 
-class Device:
+class Device(object):
 	# The ThreadPoolExecutor actualls serves two purposes:
 	#	1.) Provide a way to return results asynchronously
 	# 	2.) Limit amount of concurrent interacting processes to one
-	executor = futures.ThreadPoolExecutor(max_workers=1)
+	executor = ThreadPoolExecutor(max_workers=20)
+	my_lock = Lock()
 	signal_strength = None
 
 	def __init__(self, addr):
@@ -40,15 +43,89 @@ class Device:
 		self._set_settings()
 
 	def _echo_off(self):
-		self.port.write(com_echo_off)
-		self.serial.wait_for(reg_ok)
+		with self.my_lock:
+			self.port.write(com_echo_off)
+			self.serial.wait_for(reg_ok)
 
 	def _get_info(self, name):
-		self.port.write("AT+" + name + "\r")
-		last, logs = self.serial.read_until(reg_ok)
-		for s in logs:
-			if len(s) > 0:
-				return s
+		with self.my_lock:
+			self.port.write(b"AT+" + name + b"\r")
+			last, logs = self.serial.read_until(reg_ok)
+			for s in logs:
+				if len(s) > 0:
+					return s
+
+	def _initiate_session(self, response):
+		with self.my_lock:
+			print("WAIT FOR NETWORK")
+			self._wait_for_network()
+			print("GOT NETWORK")
+			self.port.write(response and com_session_ring or com_session)
+			last, logs = self.serial.read_until(reg_ok)
+			for msg in logs:
+				if msg[:7] == ans_session_start:
+					values = re.findall(reg_num, msg[7:])
+					print(values)
+					if values[0] < 4:
+						print("SUCCESS")
+						# return momsn code
+						return values[1]
+					else:
+						raise DeviceError ("Session failed with code " + str(values[0]))
+
+	def _set_settings(self):
+		with self.my_lock:
+			for com in [com_set_ring_alert, com_set_alerts, com_set_registration]:
+				self.port.write(com)
+				self.serial.wait_for(reg_ok)
+
+	def _send_message(self, msg):
+		with self.my_lock:
+			msg = _prepare_byte(msg)
+			self.port.write(b"AT+SBDWB=" + str(len(msg)-2) + b"\r")
+			self.serial.wait_for(reg_ready)
+			self.port.write(msg)
+			code = self.serial.wait_for(reg_num)
+			if code != b"0":
+				raise DeviceError("Expected code '0', got " + code)
+			return self._initiate_session(False)
+
+	def _interpret_registration(self, msg):
+		print("REG: " + msg)
+
+	def _wait_for_network(self):
+		# Reporting should already be enabled, but ye
+		# Expects lock to be already obtained
+		self.port.write(com_set_alerts)
+		self.serial.wait_for(reg_ciev_registered)
+
+	def _get_time(self):
+		with self.my_lock:
+			self.port.write(com_ask_time)
+			last, logs = self.serial.read_until(reg_ok)
+			for string in logs:
+				if reg_time.match(string) != None:
+					numbers = reg_num.findall(string)
+					for i in range(len(numbers)):
+						numbers[i] = int(numbers[i])
+					return datetime(
+						year = numbers[0] + 2000,
+						month = numbers[1],
+						day = numbers[2],
+						hour = numbers[3],
+						minute = numbers[4],
+						second = numbers[5]
+					)
+
+	def _get_signal_quality(self):
+		with self.my_lock:
+			self.port.write(com_ask_quality)
+			last = self.serial.wait_for(reg_quality)
+			return int(reg_num.findall(last)[0])
+
+	def _read_message(self):
+		print("attempted to read message")
+		return 2
 
 	def _initiate_session_async(self, msg, response):
 		"""Attempts to start a session async.
@@ -56,68 +133,6 @@ class Device:
 		Should only be used by the GlobalJob triggered by SBDRING.
 		"""
 		self.executor.submit(self._initiate_session, response)
-
-	def _initiate_session(self, response):
-		print(response)
-		print("WAIT FOR NETWORK")
-		self._wait_for_network()
-		print("GOT NETWORK")
-		self.port.write(response and com_session_ring or com_session)
-		last, logs = self.serial.read_until(reg_ok)
-		for msg in logs:
-			if msg[:7] == ans_session_start:
-				values = re.findall(reg_num, msg[7:])
-				print(values)
-				if values[0] < 4:
-					print("SUCCESS")
-					# return momsn code
-					return values[1]
-				else:
-					raise DeviceError ("Session failed with code " + str(values[0]))
-
-	def _set_settings(self):
-		for com in [com_set_ring_alert, com_set_alerts, com_set_registration]:
-			self.port.write(com)
-			self.serial.wait_for(reg_ok)
-
-	def _send_message(self, msg):
-		msg = _prepare_byte(msg)
-		self.port.write("AT+SBDWB=" + str(len(msg)-2) + "\r")
-		self.serial.wait_for(reg_ready)
-		self.port.write(msg)
-		code = self.serial.wait_for(reg_num)
-		if code != "0":
-			raise DeviceError("Expected code '0', got " + code)
-		return self._initiate_session(False)
-
-	def _interpret_registration(self, msg):
-		print("REG: " + msg)
-
-	def _wait_for_network(self):
-		# Reporting should already be enabled, but ye
-		self.port.write(com_set_alerts)
-		self.serial.wait_for(reg_ciev_registered)
-
-	def _get_time(self):
-		self.port.write(com_ask_time)
-		last, logs = self.serial.read_until(reg_ok)
-		for string in logs:
-			if reg_time.match(string) != None:
-				numbers = reg_num.findall(string)
-				for i in range(len(numbers)):
-					numbers[i] = int(numbers[i])
-				return datetime(
-					year = numbers[0] + 2000,
-					month = numbers[1],
-					day = numbers[2],
-					hour = numbers[3],
-					minute = numbers[4],
-					second = numbers[5]
-				)
-
-	def _read_message(self):
-		print("attempted to read message")
-		return 2
 
 	def close(self):
 		"""Terminates all outgoing connections.
@@ -133,28 +148,28 @@ class Device:
 
 		Returns a future object.
 		"""
-		return self.executor.submit(self._get_info, "CGMI")
+		return self.executor.submit(self._get_info, b"CGMI")
 
 	def get_model(self):
 		"""Queries the modem's model.
 
 		Returns a future object.
 		"""
-		return self.executor.submit(self._get_info, "CGMM")
+		return self.executor.submit(self._get_info, b"CGMM")
 
 	def get_revision(self):
 		"""Queries the modem's revision.
 
 		Returns a future object.
 		"""
-		return self.executor.submit(self._get_info, "CGMR")
+		return self.executor.submit(self._get_info, b"CGMR")
 
 	def get_serial(self):
 		"""Queries the modem's serial number.
 
 		Returns a future object.
 		"""
-		return self.executor.submit(self._get_info, "CGSN")
+		return self.executor.submit(self._get_info, b"CGSN")
 
 	def get_time(self):
 		"""Queries the iridium network's system time.
@@ -162,6 +177,9 @@ class Device:
 		Returns a future object.
 		"""
 		return self.executor.submit(self._get_time)
+
+	def get_signal_quality(self):
+		return self.executor.submit(self._get_signal_quality)
 
 	def send_message(self, msg):
 		return self.executor.submit(self._send_message, msg)

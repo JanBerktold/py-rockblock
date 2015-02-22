@@ -7,3 +7,4 @@ class DeviceError(Exception):
 
     def __init__(self, desc):
         self.desc = expr
+

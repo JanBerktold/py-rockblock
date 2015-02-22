@@ -2,7 +2,7 @@ import threading
 import re
 import time
 
-class SerialJob:
+class SerialJob(object):
 	done = False
 	result = ""
 
@@ -12,14 +12,14 @@ class SerialJob:
 		else:
 			self.regex = regex
 
-class GlobalJob:
+class GlobalJob(object):
 	def __init__(self, regex, f, arg = None):
 		self.callback = f
 		self.regex = regex
 		self.arg = arg
 
-class SerialPoller:
-	buf = ""
+class SerialPoller(object):
+	buf = b""
 	jobs = []
 	logs = []
 	running = True
@@ -28,8 +28,8 @@ class SerialPoller:
 		self.device = dev
 		self.serial = serial
 		self.global_jobs = [
-			GlobalJob("SBDRING", dev._initiate_session_async, True),
-			GlobalJob("\+AREG", dev._interpret_registration)
+			GlobalJob(b"SBDRING", dev._initiate_session_async, True),
+			GlobalJob(b"\+AREG", dev._interpret_registration)
 		]
 		self.thread = threading.Thread(target=self.worker)
 		self.thread.start()
@@ -49,19 +49,19 @@ class SerialPoller:
 						job.result = self.buf
 						self.jobs.remove(job)
 
-				if byte == "\r" or byte == "\n":
+				if byte == b"\r" or byte == b"\n":
 					# check for unsolicited updates
 					for job in self.global_jobs:
 						if re.match(job.regex, self.buf):
 							job.callback(self.buf[:-1], job.arg)
 					self.logs.append(self.buf[:-1])
-					self.buf = ""
+					self.buf = b""
 
 		self.running = False
 
 	def _reset(self):
 		self.jobs = []
-		self.buffer = ""
+		self.buf = b""
 		self.logs = []
 
 	def read_until(self, regex):
@@ -70,6 +70,8 @@ class SerialPoller:
 		self.jobs.append(job)
 		while not job.done and self.running:
 			time.sleep(0.5)
+		if not self.running:
+			return DeviceError("Connection closed while attempted to perform request")
 		return job.result, self.logs
 
 	def wait_for(self, regex):
@@ -78,4 +80,6 @@ class SerialPoller:
 		self.jobs.append(job)
 		while not job.done and self.running:
 			time.sleep(0.5)
+		if not self.running:
+			return DeviceError("Connection closed while attempted to perform request")
 		return job.result
