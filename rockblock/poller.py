@@ -2,6 +2,8 @@ import threading
 import re
 import time
 
+from .exceptions import *
+
 class SerialJob(object):
 	done = False
 	result = ""
@@ -71,15 +73,18 @@ class SerialPoller(object):
 		while not job.done and self.running:
 			time.sleep(0.5)
 		if not self.running:
-			return DeviceError("Connection closed while attempted to perform request")
+			raise DeviceError("Connection closed while attempted to perform request")
 		return job.result, self.logs
 
-	def wait_for(self, regex):
+	def wait_for(self, regex, timeout = None):
 		self._reset()
+		start = time.time()
 		job = SerialJob(regex)
 		self.jobs.append(job)
 		while not job.done and self.running:
 			time.sleep(0.5)
+			if timeout != None and timeout < (time.time() - start):
+				raise TimeoutError("Reading timeout")
 		if not self.running:
-			return DeviceError("Connection closed while attempted to perform request")
+			raise DeviceError("Connection closed while attempted to perform request")
 		return job.result

@@ -29,14 +29,16 @@ def _prepare_byte(msg):
 class Device(object):
 	# The ThreadPoolExecutor actualls serves two purposes:
 	#	1.) Provide a way to return results asynchronously
-	# 	2.) Limit amount of concurrent interacting processes to one
-	executor = ThreadPoolExecutor(max_workers=20)
+	# 	2.) Limit amount of concurrent interacting processes to one (not true)
+	# Concurrency is being handled by my_lock.
+	executor = ThreadPoolExecutor(max_workers=1)
 	my_lock = Lock()
 	signal_strength = None
 
 	def __init__(self, addr):
 		self.port = serial.Serial(addr, 19200, timeout=0.5)
 		self.serial = SerialPoller(self, self.port)
+		self.session_timeout = 10
 
 		# setup
 		self._echo_off()
@@ -56,22 +58,25 @@ class Device(object):
 					return s
 
 	def _initiate_session(self, response):
+		print("WAIT FOR NETWORK")
+		self._wait_for_network()
+		print("GOT NETWORK")
+		self.port.write(response and com_session_ring or com_session)
+		last, logs = self.serial.read_until(reg_ok)
+		for msg in logs:
+			if msg[:7] == ans_session_start:
+				values = re.findall(reg_num, msg[7:])
+				print(values)
+				if values[0] < 4:
+					print("SUCCESS")
+					# return momsn code
+					return values[1]
+				else:
+					raise DeviceError("Session failed with code " + str(values[0]))
+
+	def _initiate_session_with_lock(self, response):
 		with self.my_lock:
-			print("WAIT FOR NETWORK")
-			self._wait_for_network()
-			print("GOT NETWORK")
-			self.port.write(response and com_session_ring or com_session)
-			last, logs = self.serial.read_until(reg_ok)
-			for msg in logs:
-				if msg[:7] == ans_session_start:
-					values = re.findall(reg_num, msg[7:])
-					print(values)
-					if values[0] < 4:
-						print("SUCCESS")
-						# return momsn code
-						return values[1]
-					else:
-						raise DeviceError ("Session failed with code " + str(values[0]))
+			self._initiate_session(response)
 
 	def _set_settings(self):
 		with self.my_lock:
@@ -82,7 +87,7 @@ class Device(object):
 	def _send_message(self, msg):
 		with self.my_lock:
 			msg = _prepare_byte(msg)
-			self.port.write(b"AT+SBDWB=" + str(len(msg)-2) + b"\r")
+			self.port.write(b"AT+SBDWB=" + bytes(str(len(msg)-2).encode('utf-8')) + b"\r")
 			self.serial.wait_for(reg_ready)
 			self.port.write(msg)
 			code = self.serial.wait_for(reg_num)
@@ -97,7 +102,7 @@ class Device(object):
 		# Reporting should already be enabled, but ye
 		# Expects lock to be already obtained
 		self.port.write(com_set_alerts)
-		self.serial.wait_for(reg_ciev_registered)
+		self.serial.wait_for(reg_ciev_registered, self.session_timeout)
 
 	def _get_time(self):
 		with self.my_lock:
@@ -132,7 +137,7 @@ class Device(object):
 
 		Should only be used by the GlobalJob triggered by SBDRING.
 		"""
-		self.executor.submit(self._initiate_session, response)
+		self.executor.submit(self._initiate_session_with_lock, response)
 
 	def close(self):
 		"""Terminates all outgoing connections.
@@ -179,6 +184,10 @@ class Device(object):
 		return self.executor.submit(self._get_time)
 
 	def get_signal_quality(self):
+		"""Queries the modem's signal quality.
+
+		Returns a future object.
+		"""
 		return self.executor.submit(self._get_signal_quality)
 
 	def send_message(self, msg):
@@ -186,3 +195,6 @@ class Device(object):
 
 	def read_message(self, msg):
 		return self.executor.submit(self._read_message)
+
+	def set_session_timeout(self, s):
+		self.session_timeout = s
