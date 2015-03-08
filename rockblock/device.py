@@ -33,7 +33,10 @@ class Device(object):
 	# Concurrency is being handled by my_lock.
 	executor = ThreadPoolExecutor(max_workers=1)
 	my_lock = Lock()
+	message_event = threading.Event()
 	signal_strength = None
+	message_available = False
+	had_session = False
 
 	def __init__(self, addr):
 		self.port = serial.Serial(addr, 19200, timeout=0.5)
@@ -58,6 +61,7 @@ class Device(object):
 					return s
 
 	def _initiate_session(self, response):
+		had_session = True
 		print("WAIT FOR NETWORK")
 		self._wait_for_network()
 		print("GOT NETWORK")
@@ -67,7 +71,12 @@ class Device(object):
 			if msg[:7] == ans_session_start:
 				values = re.findall(reg_num, msg[7:])
 				print(values)
-				if values[0] < 4:
+				if values[2] == 1:
+					print("GOT MESSAGES")
+					message_available = True
+					self.message_event.set()
+
+				if values[0] < 5:
 					print("SUCCESS")
 					# return momsn code
 					return values[1]
@@ -128,8 +137,22 @@ class Device(object):
 			last = self.serial.wait_for(reg_quality)
 			return int(reg_num.findall(last)[0])
 
+	# does the actual reading, assumes lock is already obtained
+	def _actual_read_message(self):
+		self.port.write(com_read)
+
 	def _read_message(self):
+		if not had_session:
+			self._initiate_session_with_lock()
 		print("attempted to read message")
+		if not message_available:
+			self.message_event.wait()
+			self.message_event.clear()
+
+		with self.my_lock:
+			message_available = False
+			print("RECIEVE MESSAGE")
+
 		return 2
 
 	def _initiate_session_async(self, msg, response):
@@ -194,7 +217,8 @@ class Device(object):
 		return self.executor.submit(self._send_message, msg)
 
 	def read_message(self, msg):
-		return self.executor.submit(self._read_message)
+		future = self.executor.submit(self._read_message, future)
+		return self.executor.submit(self._read_message, future)
 
 	def set_session_timeout(self, s):
 		self.session_timeout = s

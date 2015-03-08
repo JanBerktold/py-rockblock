@@ -15,5 +15,6 @@ com_session = b"AT+SBDIX\r"
 com_session_ring = b"AT+SBDIXA\r"
 com_ask_time = b"AT+CCLK?\r"
 com_ask_quality = b"AT+CSQ\r"
+com_read = b"AT+SBDRB"
 
 ans_session_start = b"+SBDIX:"

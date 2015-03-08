@@ -7,7 +7,6 @@ setup(
 	url='http://github.com/janberktold/py-rockblock',
 	author='Jan Berktold',
 	author_email='janberktold@aol.com',
-	license='MIT',
 	packages=['rockblock'],
 	zip_safe=False
 )
