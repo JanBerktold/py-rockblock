@@ -52,6 +52,7 @@ class SerialPoller(object):
 						self.jobs.remove(job)
 
 				if byte == b"\r" or byte == b"\n":
+					print(self.buf)
 					# check for unsolicited updates
 					for job in self.global_jobs:
 						if re.match(job.regex, self.buf):

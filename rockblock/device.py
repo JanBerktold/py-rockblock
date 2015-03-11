@@ -39,7 +39,7 @@ class Device(object):
 	had_session = False
 
 	def __init__(self, addr):
-		self.port = serial.Serial(addr, 19200, timeout=0.5)
+		self.port = serial.Serial(addr, 19200, timeout=None)
 		self.serial = SerialPoller(self, self.port)
 		self.session_timeout = 10
 
@@ -142,16 +142,19 @@ class Device(object):
 		self.port.write(com_read)
 
 	def _read_message(self):
-		if not had_session:
-			self._initiate_session_with_lock()
+		if not self.message_available:
+			self._initiate_session_with_lock(False)
+
 		print("attempted to read message")
-		if not message_available:
+		if not self.message_available:
 			self.message_event.wait()
 			self.message_event.clear()
 
 		with self.my_lock:
 			message_available = False
 			print("RECIEVE MESSAGE")
+			msg = self._actual_read_message()
+			print(msg)
 
 		return 2
 
@@ -216,9 +219,8 @@ class Device(object):
 	def send_message(self, msg):
 		return self.executor.submit(self._send_message, msg)
 
-	def read_message(self, msg):
-		future = self.executor.submit(self._read_message, future)
-		return self.executor.submit(self._read_message, future)
+	def read_message(self):
+		return self.executor.submit(self._read_message)
 
 	def set_session_timeout(self, s):
 		self.session_timeout = s
